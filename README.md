@@ -113,6 +113,26 @@ await trueup.audit([{ path: "inv-1050.txt" }], { weights: result.details.weights
 
 `auditStored(fileIds, { model })` audits stored files. One analysis per call.
 
+## Estimate
+
+Price a new job from your past estimates. Send a domain file for the trade (a `.tu` file naming the facts to read, what costs scale with, and the cost categories), at least 3 past estimates in any format (CSV, TSV, Markdown, JSON, or text proposals), and one request describing the new job in plain words:
+
+```ts
+const result = await trueup.estimate([
+  { path: "barndo.tu" },
+  { path: "01_anderson.csv" }, { path: "02_brooks.csv" }, { path: "03_carter.md" }, /* … */
+  { path: "job_a.txt" },
+]);
+console.log(result.headline);
+// job_a.txt: $292,267 (80% range $248,742 – $335,792) from 10 past estimates.
+for (const f of result.findings.filter((f) => f.kind === "priced_line")) console.log(f.subject, f.amount, f.detail);
+
+// The next job, with what was learned (no need to send the history again):
+await trueup.estimate([{ path: "job_b.txt" }], { weights: result.details.weights });
+```
+
+`estimateStored(fileIds, { model })` prices from stored files. One analysis per call.
+
 ## Stored files, runs and saved models
 
 Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
@@ -197,7 +217,7 @@ new TrueUp({
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 8 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 10 analyses)
 just test                            # or: docker compose run --rm test
 ```
 
