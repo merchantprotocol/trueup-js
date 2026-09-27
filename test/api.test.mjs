@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Needs TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -102,4 +102,21 @@ live("stored files: upload, reconcile by id, runs, saved models, download, clean
     await tu.files.delete(receiving.id);
   }
   await assert.rejects(tu.files.get(statement.id), (e) => e instanceof NotFoundError);
+});
+
+const MATCHED = [["1", "1"], ["2", "2"], ["3", "3"], ["4", "5"]];
+
+live("match two lists: invoice lines paired with the catalog, then the learning reused", async () => {
+  const tu = new TrueUp();
+  const result = await tu.match({ left: { path: fixture("invoice.csv") }, right: { path: fixture("catalog.csv") } });
+  assert.equal(result.analysis, "match");
+  assert.deepEqual(result.details.pairs.map(([a, b]) => [a, b]), MATCHED);
+  assert.deepEqual(result.findings.filter((f) => f.kind === "only_left").map((f) => f.subject), ["5"]);
+  const again = await tu.match({
+    left: { name: "invoice.csv", rows: rows(fixture("invoice.csv")) },
+    right: { name: "catalog.csv", rows: rows(fixture("catalog.csv")) },
+    weights: result.details.weights,
+  });
+  assert.deepEqual(again.details.pairs.map(([a, b]) => [a, b]), MATCHED);
+  assert.equal(again.details.model.learned, false);
 });
