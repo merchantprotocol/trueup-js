@@ -81,6 +81,33 @@ await trueup.reconcile({
 
 Each call to `reconcile` or `reconcileFiles` counts as one analysis on your plan.
 
+## Stored files, runs and saved models
+
+Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
+
+```ts
+const [statement, receiving] = await trueup.files.upload({ path: "statement.csv" }, { path: "receiving.csv" });
+statement.rows;    // 8
+statement.roles;   // { "Inv Date": "date", Qty: "number", ... }
+
+const result = await trueup.reconcileStored({ leftFileId: statement.id, rightFileId: receiving.id });
+const modelId = await trueup.models.create({ runId: result.run_id, name: "Acme statements" });
+
+// Next month: apply what was learned.
+await trueup.reconcileStored({ fileIds: [aprilStatement.id, aprilReceiving.id] }, { model: modelId });
+```
+
+| Call | Returns |
+|---|---|
+| `files.upload(...tables)`, `files.list()`, `files.get(id)` | stored files: `id`, `name`, `rows`, `columns`, `roles` |
+| `files.content(id)` | the bytes, exactly as uploaded (`Uint8Array`) |
+| `files.delete(id)` | |
+| `reconcileStored({ leftFileId, rightFileId } \| { fileIds }, { model, answers })` | a result plus `run_id` (one analysis) |
+| `runs.list({ limit, before })` | `{ runs, has_more }`, newest first |
+| `runs.all()` | every run (an async iterator that pages for you) |
+| `runs.get(id)` | `{ run, result }` |
+| `models.create({ runId, name })`, `models.list()`, `models.get(id)`, `models.delete(id)` | `models.get` includes the `weights` |
+
 ## Findings
 
 | `kind` | Meaning |
@@ -138,7 +165,7 @@ new TrueUp({
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 2 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 4 analyses)
 just test                            # or: docker compose run --rm test
 ```
 
