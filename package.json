@@ -1,0 +1,29 @@
+{
+  "name": "trueup",
+  "version": "0.1.0",
+  "description": "Official TrueUp API client for JavaScript and TypeScript: reconcile ledgers, statements and bank feeds",
+  "keywords": ["trueup", "reconciliation", "accounting", "bank-reconciliation", "ledger", "api-client"],
+  "homepage": "https://trueup-cloud.merchantprotocol.workers.dev/docs#sdks",
+  "repository": { "type": "git", "url": "git+https://github.com/merchantprotocol/trueup-js.git" },
+  "bugs": { "url": "https://github.com/merchantprotocol/trueup-js/issues" },
+  "license": "MIT",
+  "author": "Merchant Protocol",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "engines": { "node": ">=18" },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
