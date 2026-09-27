@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Needs TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -119,4 +119,16 @@ live("match two lists: invoice lines paired with the catalog, then the learning 
   });
   assert.deepEqual(again.details.pairs.map(([a, b]) => [a, b]), MATCHED);
   assert.equal(again.details.model.learned, false);
+});
+
+live("audit six invoices: the one whose total is $200 too high, then one invoice against the saved laws", async () => {
+  const tu = new TrueUp();
+  const names = ["inv-1041.txt", "inv-1042.txt", "inv-1043.txt", "inv-1044.txt", "inv-1045.txt", "inv-1046.txt"];
+  const result = await tu.audit(names.map((n) => ({ path: fixture(`invoices/${n}`) })));
+  assert.equal(result.analysis, "audit");
+  assert.deepEqual(result.findings.map((f) => [f.subject, f.status, f.amount]), [["inv-1045.txt", "yes", 200]]);
+  assert.ok(result.details.laws.some((l) => l.law === "subtotal + tax amount = total"));
+  const one = await tu.audit([{ path: fixture("invoices/inv-1045.txt") }], { weights: result.details.weights });
+  assert.equal(one.details.model.learned, false);
+  assert.deepEqual(one.findings.map((f) => f.subject), ["inv-1045.txt"]);
 });

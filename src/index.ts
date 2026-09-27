@@ -103,6 +103,28 @@ export interface MatchResult {
   [key: string]: unknown;
 }
 
+/** The answer to an audit call: documents (analysis "audit") or a table's rows (analysis "table-audit"). */
+export interface AuditResult {
+  analysis: "audit" | "table-audit";
+  title: string;
+  headline: string;
+  stats: Record<string, number>;
+  /** kind: arithmetic (numbers break a law; amount is how far off) or duplicate_row. */
+  findings: Finding[];
+  details: {
+    /** Every law learned (or applied): "subtotal + tax amount = total", and how often it held. */
+    laws: { scope?: string; law: string; held: string }[];
+    model: { learned: boolean };
+    /** Pass back as `weights` to check new documents or rows against the same laws. */
+    weights: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  inputs: string[];
+  engine?: string;
+  run_id?: string;
+  [key: string]: unknown;
+}
+
 export interface Account {
   team: { id: string; name: string };
   plan: { slug: string; name: string } | null;
@@ -341,6 +363,24 @@ export class TrueUp {
   matchStored(input: StoredInput, options: { model?: string } = {}): Promise<MatchResult & { run_id: string }> {
     const ids = "fileIds" in input ? { file_ids: input.fileIds } : { left_file_id: input.leftFileId, right_file_id: input.rightFileId };
     return this.request("POST", "/v1/match", { json: { ...ids, model: options.model } });
+  }
+
+  /**
+   * Find what doesn't add up. Text documents (invoices, statements, 4 or more of a kind): TrueUp learns the
+   * arithmetic each kind obeys and flags the ones that break it. One table: the same for its rows, plus repeated
+   * rows. `weights` (details.weights of an earlier audit) checks new documents against the same laws. One analysis.
+   */
+  async audit(files: TableInput[], options: { weights?: Record<string, unknown> } = {}): Promise<AuditResult> {
+    if (!files.length) throw new InvalidRequestError("Pass the documents (or one table) to audit.", 0, "invalid_request");
+    const form = new FormData();
+    for (const f of files) form.append("files", ...(await asFile(f)));
+    addOptions(form, options);
+    return this.request("POST", "/v1/audit", { form });
+  }
+
+  /** Audit files already uploaded to the team, by id; `model` applies a saved audit model. The run is kept. One analysis. */
+  auditStored(fileIds: string[], options: { model?: string } = {}): Promise<AuditResult & { run_id: string }> {
+    return this.request("POST", "/v1/audit", { json: { file_ids: fileIds, model: options.model } });
   }
 
   /**
