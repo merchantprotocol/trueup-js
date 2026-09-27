@@ -104,6 +104,56 @@ export interface Plan {
   limits: { metric: string; included: number; hard_cap: boolean; overage_micros_per_unit: number | null }[];
 }
 
+/** A file stored in the team (uploaded through the API or the dashboard). */
+export interface StoredFile {
+  id: string;
+  name: string;
+  size?: number;
+  /** "table" or "document". */
+  kind: string;
+  rows: number | null;
+  columns: string[];
+  /** What TrueUp read each column as: "date", "number", "text", ... */
+  roles: Record<string, string> | null;
+  created_at?: string;
+}
+
+export interface Run {
+  id: string;
+  analysis: string;
+  /** "done" or "failed". */
+  status: string;
+  /** "api" or "portal". */
+  via: string;
+  inputs: string[];
+  model: { id: string; name: string } | null;
+  headline: string | null;
+  stats: Record<string, number> | null;
+  /** How many findings the run has. */
+  findings: number | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface Model {
+  id: string;
+  name: string;
+  analysis: string;
+  source_run_id: string | null;
+  created_at: string;
+  /** Only from `models.get`: what was learned, usable as `weights`. */
+  weights?: Record<string, unknown>;
+}
+
+/** Files already uploaded to the team, by id: two with sides, or several for TrueUp to pick from. */
+export type StoredInput = { leftFileId: string; rightFileId: string } | { fileIds: string[] };
+
+export interface StoredReconcileOptions {
+  /** A saved model id: apply what it learned instead of learning again. */
+  model?: string;
+  answers?: Answers;
+}
+
 // ------------------------------------------------------------------ errors
 
 /** Any error the API returned, or a failure to reach it. `code` is the API's error code; branch on it. */
@@ -231,9 +281,70 @@ export class TrueUp {
     return this.request("POST", "/v1/reconcile", { form });
   }
 
+  /**
+   * Reconcile files already uploaded to the team (see `files.upload`). The run is kept: its id comes back as
+   * `run_id` and `runs.get` returns it later. One analysis.
+   */
+  reconcileStored(input: StoredInput, options: StoredReconcileOptions = {}): Promise<ReconcileResult & { run_id: string }> {
+    const ids = "fileIds" in input ? { file_ids: input.fileIds } : { left_file_id: input.leftFileId, right_file_id: input.rightFileId };
+    return this.request("POST", "/v1/reconcile", { json: { ...ids, model: options.model, answers: options.answers } });
+  }
+
+  /** The team's stored files. */
+  readonly files = {
+    /** Upload one or more files; each comes back with its id and what TrueUp read in it. */
+    upload: async (...inputs: TableInput[]): Promise<StoredFile[]> => {
+      if (!inputs.length) throw new InvalidRequestError("Pass at least one file to upload.", 0, "invalid_request");
+      const form = new FormData();
+      for (const f of inputs) form.append("file", ...(await asFile(f)));
+      return (await this.request<{ files: StoredFile[] }>("POST", "/v1/files", { form })).files;
+    },
+    list: async (): Promise<StoredFile[]> => (await this.request<{ files: StoredFile[] }>("GET", "/v1/files")).files,
+    get: async (id: string): Promise<StoredFile> => (await this.request<{ file: StoredFile }>("GET", `/v1/files/${enc(id)}`)).file,
+    /** The file's bytes, exactly as uploaded. */
+    content: (id: string): Promise<Uint8Array> => this.request("GET", `/v1/files/${enc(id)}/content`, { raw: true }),
+    delete: async (id: string): Promise<void> => { await this.request("DELETE", `/v1/files/${enc(id)}`); },
+  };
+
+  /** Runs on stored files (from the API or the dashboard), newest first. */
+  readonly runs = {
+    /** One page: up to `limit` (1-100) runs older than the run id `before`. */
+    list: (options: { limit?: number; before?: string } = {}): Promise<{ runs: Run[]; has_more: boolean }> => {
+      const q = new URLSearchParams();
+      if (options.limit !== undefined) q.set("limit", String(options.limit));
+      if (options.before) q.set("before", options.before);
+      return this.request("GET", `/v1/runs${q.size ? `?${q}` : ""}`);
+    },
+    /** Every run, page by page. */
+    all: (): AsyncGenerator<Run> => this.allRuns(),
+    /** One run and its full result (the same shape `reconcile` returns). */
+    get: (id: string): Promise<{ run: Run; result: ReconcileResult | null }> => this.request("GET", `/v1/runs/${enc(id)}`),
+  };
+
+  /** Saved models: what a run learned, reusable on next month's files. */
+  readonly models = {
+    list: async (): Promise<Model[]> => (await this.request<{ models: Model[] }>("GET", "/v1/models")).models,
+    /** Save what a run learned. Returns the new model's id. */
+    create: async (input: { runId: string; name?: string }): Promise<string> =>
+      (await this.request<{ id: string }>("POST", "/v1/models", { json: { run_id: input.runId, name: input.name } })).id,
+    /** One model, with its `weights`. */
+    get: async (id: string): Promise<Model> => (await this.request<{ model: Model }>("GET", `/v1/models/${enc(id)}`)).model,
+    delete: async (id: string): Promise<void> => { await this.request("DELETE", `/v1/models/${enc(id)}`); },
+  };
+
+  private async *allRuns(): AsyncGenerator<Run> {
+    let before: string | undefined;
+    for (;;) {
+      const page = await this.runs.list({ limit: 100, before });
+      yield* page.runs;
+      if (!page.has_more || !page.runs.length) return;
+      before = page.runs[page.runs.length - 1].id;
+    }
+  }
+
   // ---------------------------------------------------------------- transport
 
-  private async request<T>(method: string, path: string, body: { json?: unknown; form?: FormData } = {}): Promise<T> {
+  private async request<T>(method: string, path: string, body: { json?: unknown; form?: FormData; raw?: boolean } = {}): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const headers: Record<string, string> = {
         authorization: `Bearer ${this.apiKey}`,
@@ -257,6 +368,7 @@ export class TrueUp {
         }
         throw new ConnectionError(`Couldn't reach TrueUp at ${this.baseUrl}: ${(e as Error).message}`, 0, "connection_error");
       }
+      if (res.ok && body.raw) return new Uint8Array(await res.arrayBuffer()) as T;
       const text = await res.text();
       let data: unknown = null;
       try {
@@ -277,6 +389,8 @@ export class TrueUp {
     }
   }
 }
+
+const enc = encodeURIComponent;
 
 function backoff(attempt: number): number {
   return Math.min(30_000, 1000 * 2 ** attempt) * (0.5 + Math.random() / 2);

@@ -1,9 +1,9 @@
 // Integration tests against the live TrueUp API. Needs TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 2 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { AuthenticationError, InvalidRequestError, TrueUp } from "../dist/index.js";
+import { AuthenticationError, InvalidRequestError, NotFoundError, TrueUp } from "../dist/index.js";
 
 const fixture = (name) => new URL(`./fixtures/${name}`, import.meta.url).pathname;
 const live = process.env.TRUEUP_API_KEY ? test : test.skip;
@@ -65,4 +65,41 @@ live("API errors are typed", async () => {
     (e) => e instanceof AuthenticationError && e.status === 401 && e.code === "invalid_api_key");
   await assert.rejects(new TrueUp().reconcile({ left: { path: fixture("statement.csv") }, right: { name: "scan.pdf", content: "%PDF-1.4" } }),
     (e) => e instanceof InvalidRequestError && e.status === 422 && e.code === "unsupported_file");
+});
+
+live("stored files: upload, reconcile by id, runs, saved models, download, clean up", async () => {
+  const tu = new TrueUp();
+  const [statement, receiving] = await tu.files.upload({ path: fixture("statement.csv") }, { path: fixture("receiving.csv") });
+  try {
+    assert.equal(statement.rows, 8);
+    assert.equal((await tu.files.get(receiving.id)).name, "receiving.csv");
+    assert.ok((await tu.files.list()).some((f) => f.id === statement.id));
+    assert.equal(new TextDecoder().decode(await tu.files.content(statement.id)), readFileSync(fixture("statement.csv"), "utf8"));
+
+    const result = await tu.reconcileStored({ leftFileId: statement.id, rightFileId: receiving.id });
+    assert.equal(result.stats.paired, 7);
+    assert.match(result.run_id, /^run_/);
+    const { run, result: kept } = await tu.runs.get(result.run_id);
+    assert.equal(run.status, "done");
+    assert.equal(kept.stats.paired, 7);
+    const page = await tu.runs.list({ limit: 1 });
+    assert.equal(page.runs.length, 1);
+    assert.equal(page.has_more, true);
+    const next = await tu.runs.list({ limit: 1, before: page.runs[0].id });
+    assert.notEqual(next.runs[0].id, page.runs[0].id);
+
+    const modelId = await tu.models.create({ runId: result.run_id, name: "sdk test" });
+    try {
+      assert.equal((await tu.models.get(modelId)).weights.format, "trueup.match-weights");
+      const again = await tu.reconcileStored({ fileIds: [statement.id, receiving.id] }, { model: modelId });
+      assert.equal(again.details.model.learned, false);
+    } finally {
+      await tu.models.delete(modelId);
+    }
+    await assert.rejects(tu.models.get(modelId), (e) => e instanceof NotFoundError);
+  } finally {
+    await tu.files.delete(statement.id);
+    await tu.files.delete(receiving.id);
+  }
+  await assert.rejects(tu.files.get(statement.id), (e) => e instanceof NotFoundError);
 });
