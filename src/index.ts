@@ -125,6 +125,31 @@ export interface AuditResult {
   [key: string]: unknown;
 }
 
+/** The answer to an estimate call: the new job priced, part by part, with an 80% range. */
+export interface EstimateResult {
+  analysis: "estimate";
+  title: string;
+  headline: string;
+  /** total, low, high (the 80% range), categories priced, past estimates, … */
+  stats: Record<string, number>;
+  /** kind "priced_line": one per cost category (amount = the price; data: driver, quantity, rate, low, high).
+   *  status "unsure": things a person should check. */
+  findings: Finding[];
+  details: {
+    /** Which categories the job includes, and why. */
+    scope: { category: string; include: boolean; confidence: number; why: string }[];
+    total: { mid: number; low: number; high: number; [key: string]: unknown };
+    model: { learned: boolean };
+    /** The trade and its labeled past estimates: pass back as `weights` with just a request next time. */
+    weights: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  inputs: string[];
+  engine?: string;
+  run_id?: string;
+  [key: string]: unknown;
+}
+
 export interface Account {
   team: { id: string; name: string };
   plan: { slug: string; name: string } | null;
@@ -376,6 +401,24 @@ export class TrueUp {
     for (const f of files) form.append("files", ...(await asFile(f)));
     addOptions(form, options);
     return this.request("POST", "/v1/audit", { form });
+  }
+
+  /**
+   * Price a new job from past estimates. Send a domain file for the trade (.tu), at least 3 past estimates in any
+   * format, and one request describing the new job; or, with `weights` (details.weights of an earlier estimate),
+   * just the request. One analysis.
+   */
+  async estimate(files: TableInput[], options: { weights?: Record<string, unknown> } = {}): Promise<EstimateResult> {
+    if (!files.length) throw new InvalidRequestError("Pass the domain file, past estimates and the request.", 0, "invalid_request");
+    const form = new FormData();
+    for (const f of files) form.append("files", ...(await asFile(f)));
+    addOptions(form, options);
+    return this.request("POST", "/v1/estimate", { form });
+  }
+
+  /** Price from files already uploaded to the team, by id; `model` applies a saved estimate model. The run is kept. */
+  estimateStored(fileIds: string[], options: { model?: string } = {}): Promise<EstimateResult & { run_id: string }> {
+    return this.request("POST", "/v1/estimate", { json: { file_ids: fileIds, model: options.model } });
   }
 
   /** Audit files already uploaded to the team, by id; `model` applies a saved audit model. The run is kept. One analysis. */

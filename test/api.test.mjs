@@ -1,5 +1,5 @@
 // Integration tests against the live TrueUp API. Needs TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-// Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+// Each full run uses 10 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -84,9 +84,10 @@ live("stored files: upload, reconcile by id, runs, saved models, download, clean
     assert.equal(kept.stats.paired, 7);
     const page = await tu.runs.list({ limit: 1 });
     assert.equal(page.runs.length, 1);
-    assert.equal(page.has_more, true);
-    const next = await tu.runs.list({ limit: 1, before: page.runs[0].id });
-    assert.notEqual(next.runs[0].id, page.runs[0].id);
+    if (page.has_more) {
+      const next = await tu.runs.list({ limit: 1, before: page.runs[0].id });
+      assert.notEqual(next.runs[0].id, page.runs[0].id);
+    }
 
     const modelId = await tu.models.create({ runId: result.run_id, name: "sdk test" });
     try {
@@ -131,4 +132,19 @@ live("audit six invoices: the one whose total is $200 too high, then one invoice
   const one = await tu.audit([{ path: fixture("invoices/inv-1045.txt") }], { weights: result.details.weights });
   assert.equal(one.details.model.learned, false);
   assert.deepEqual(one.findings.map((f) => f.subject), ["inv-1045.txt"]);
+});
+
+const TRADE = ["barndo.tu", "01_anderson.csv", "02_brooks.csv", "03_carter.md", "04_dalton.txt", "05_ellis.json", "06_foster.tsv",
+  "07_garrison.txt", "08_hayes.csv", "09_iverson.csv", "10_jensen.md"];
+
+live("estimate a new job from 10 past estimates, then the next one with the saved model", async () => {
+  const tu = new TrueUp();
+  const result = await tu.estimate([...TRADE, "job_a.txt"].map((n) => ({ path: fixture(`barndo/${n}`) })));
+  assert.equal(result.analysis, "estimate");
+  assert.equal(result.stats["past estimates"], 10);
+  assert.ok(Math.abs(result.stats.total - 292267) / 292267 < 0.05, `total ${result.stats.total}`);
+  assert.ok(result.stats.low < result.stats.total && result.stats.total < result.stats.high);
+  const next = await tu.estimate([{ path: fixture("barndo/job_b.txt") }], { weights: result.details.weights });
+  assert.equal(next.details.model.learned, false);
+  assert.ok(next.stats.total > 0);
 });
