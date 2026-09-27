@@ -81,6 +81,21 @@ await trueup.reconcile({
 
 Each call to `reconcile` or `reconcileFiles` counts as one analysis on your plan.
 
+## Match
+
+Two lists that describe the same things in different words (two catalogs, a supplier's price book and your invoice, two vendor lists): every record on the left is paired with its counterpart on the right, or reported as having none. Nothing is configured; the columns can have different names.
+
+```ts
+const result = await trueup.match({ left: { path: "invoice.csv" }, right: { path: "catalog.csv" } });
+console.log(result.headline);
+// 4 of 5 records in invoice.csv matched to catalog.csv (0 unsure); 1 have no counterpart.
+for (const f of result.findings) console.log(f.kind, f.subject, f.confidence, f.detail);
+// match 4 ~ 5 0.965 4 · cheese puffs jumbo 8oz · 3.30 · 10  ↔  C-105 · Cheese Puffs Jumbo 8 oz · 3.25
+// only_left 5 null 5 · beef jerky teriyaki 2.5oz · 5.75 · 6
+```
+
+`kind` is `match`, `unsure_match` (a person should check), `only_left` or `only_right`. `details.pairs` lists `[left id, right id, confidence]`. Like `reconcile`, it takes files, contents or rows; `matchFiles([...])` picks the pair; `matchStored({ leftFileId, rightFileId }, { model })` works on stored files; and `details.weights` can be passed back as `weights` to match next month's lists the same way. One analysis per call.
+
 ## Stored files, runs and saved models
 
 Files uploaded to your team stay there (you'll also see them in the dashboard). Runs on stored files are kept, and what a run learned can be saved as a model:
@@ -165,7 +180,7 @@ new TrueUp({
 The tests run in Docker against the live API:
 
 ```bash
-export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 4 analyses)
+export TRUEUP_API_KEY=tu_live_...   # a key for a test team (each run uses 6 analyses)
 just test                            # or: docker compose run --rm test
 ```
 

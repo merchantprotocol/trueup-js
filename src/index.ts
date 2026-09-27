@@ -8,6 +8,8 @@
  *       right: { path: "receiving.csv" },
  *     });
  *     for (const f of result.findings) console.log(f.kind, f.subject, f.detail);
+ *
+ *     const matched = await trueup.match({ left: { path: "invoice.csv" }, right: { path: "catalog.csv" } });
  */
 
 export const VERSION = "0.1.0";
@@ -69,6 +71,35 @@ export interface ReconcileResult {
   };
   inputs: string[];
   engine?: string;
+  [key: string]: unknown;
+}
+
+export interface MatchFinding extends Omit<Finding, "kind"> {
+  /** match | unsure_match | only_left | only_right */
+  kind: string;
+}
+
+/** The answer to a match call. */
+export interface MatchResult {
+  analysis: "match";
+  title: string;
+  headline: string;
+  stats: Record<string, number>;
+  findings: MatchFinding[];
+  details: {
+    /** How each list's columns were lined up: {original name: shared name}. */
+    columns: { left: Record<string, string>; right: Record<string, string> };
+    /** [left id, right id, confidence] for every pair. */
+    pairs: [string, string, number][];
+    model: { learned: boolean };
+    /** What was learned: pass back as `weights` to match the same way without learning. */
+    weights: Record<string, unknown> | null;
+    [key: string]: unknown;
+  };
+  inputs: string[];
+  engine?: string;
+  /** The kept run, for `matchStored`. */
+  run_id?: string;
   [key: string]: unknown;
 }
 
@@ -279,6 +310,37 @@ export class TrueUp {
     for (const f of files) form.append("files", ...(await asFile(f)));
     addOptions(form, options);
     return this.request("POST", "/v1/reconcile", { form });
+  }
+
+  /**
+   * Match two lists that describe the same things in different words (two catalogs, a price book and an invoice):
+   * each record on `left` (the list to go through) is paired with its counterpart on `right` (the list to search),
+   * or reported as having none. One analysis.
+   */
+  async match(input: { left: TableInput; right: TableInput; weights?: Record<string, unknown> }): Promise<MatchResult> {
+    const { left, right, weights } = input;
+    if ("rows" in left && "rows" in right) {
+      return this.request("POST", "/v1/match", { json: { left: { name: left.name, rows: left.rows }, right: { name: right.name, rows: right.rows }, weights } });
+    }
+    const form = new FormData();
+    form.set("left", ...(await asFile(left)));
+    form.set("right", ...(await asFile(right)));
+    addOptions(form, { weights });
+    return this.request("POST", "/v1/match", { form });
+  }
+
+  /** Send two or more lists; TrueUp picks the pair to match and puts the shorter on the left. One analysis. */
+  async matchFiles(files: TableInput[], options: { weights?: Record<string, unknown> } = {}): Promise<MatchResult> {
+    const form = new FormData();
+    for (const f of files) form.append("files", ...(await asFile(f)));
+    addOptions(form, options);
+    return this.request("POST", "/v1/match", { form });
+  }
+
+  /** Match lists already uploaded to the team, by id; `model` applies a saved match model. The run is kept. One analysis. */
+  matchStored(input: StoredInput, options: { model?: string } = {}): Promise<MatchResult & { run_id: string }> {
+    const ids = "fileIds" in input ? { file_ids: input.fileIds } : { left_file_id: input.leftFileId, right_file_id: input.rightFileId };
+    return this.request("POST", "/v1/match", { json: { ...ids, model: options.model } });
   }
 
   /**
